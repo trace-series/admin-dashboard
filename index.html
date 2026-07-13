@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trace Series — 管理者ダッシュボード</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Hiragino Sans', 'Noto Sans JP', -apple-system, sans-serif;
+    background: radial-gradient(circle at 20% 0%, #2a1245 0%, #0f0720 60%);
+    color: #fff;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  .card {
+    width: 100%;
+    max-width: 380px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 20px;
+    padding: 40px 28px;
+    text-align: center;
+  }
+
+  .mark {
+    width: 48px;
+    height: 48px;
+    margin: 0 auto 18px;
+    border-radius: 12px;
+    background: linear-gradient(135deg,#3d1a5e,#7b1a3e);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    font-weight: 900;
+  }
+
+  h1 {
+    font-size: 18px;
+    font-weight: 700;
+    margin: 0 0 4px;
+    letter-spacing: 0.02em;
+  }
+
+  .sub {
+    font-size: 12px;
+    color: rgba(255,255,255,0.45);
+    margin: 0 0 28px;
+  }
+
+  .btn-x {
+    width: 100%;
+    padding: 13px;
+    border: none;
+    border-radius: 12px;
+    background: #000;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+  .btn-x:active { opacity: 0.8; }
+
+  .status {
+    margin-top: 18px;
+    font-size: 12px;
+    color: rgba(255,255,255,0.5);
+    min-height: 16px;
+    line-height: 1.6;
+  }
+  .status.err { color: #f87171; }
+  .status.ok { color: #4ade80; }
+
+  .role-badge {
+    display: inline-block;
+    margin-top: 6px;
+    padding: 3px 12px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .role-super_admin { background: linear-gradient(135deg,#c9a84c,#e8c96b); color: #1a0a2e; }
+  .role-moderator { background: rgba(61,26,94,0.5); color: #c9a8e8; }
+
+  .app-picker {
+    display: none;
+    margin-top: 24px;
+    text-align: left;
+  }
+  .app-picker.show { display: block; }
+
+  .app-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 12px;
+    margin-bottom: 10px;
+    cursor: pointer;
+  }
+  .app-row:active { background: rgba(255,255,255,0.1); }
+  .app-name { font-size: 14px; font-weight: 700; }
+  .app-arrow { color: rgba(255,255,255,0.3); font-size: 16px; }
+
+  .signout {
+    margin-top: 24px;
+    font-size: 12px;
+    color: rgba(255,255,255,0.35);
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="mark">T</div>
+  <h1>Trace Series 管理者ダッシュボード</h1>
+  <p class="sub">複数アプリの承認・評価をここから一括管理</p>
+
+  <div id="login-view">
+    <button class="btn-x" onclick="loginWithX()">𝕏 でログイン</button>
+    <div class="status" id="login-status"></div>
+  </div>
+
+  <div id="authed-view" style="display:none;">
+    <div style="font-size:13px;color:rgba(255,255,255,0.7);">ログイン中</div>
+    <div style="font-size:16px;font-weight:700;margin-top:2px;" id="me-username"></div>
+    <span class="role-badge" id="me-role"></span>
+
+    <div class="app-picker" id="app-picker">
+      <div style="font-size:11px;color:rgba(255,255,255,0.4);margin-bottom:10px;letter-spacing:0.05em;">アプリを選択</div>
+      <div id="app-list"></div>
+    </div>
+
+    <button class="signout" onclick="signOut()">ログアウト</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+  // ── 認証用プロジェクト（Trace IVEのSupabaseを共通ログインとして使う） ──
+  const AUTH_URL = 'https://aniuehncwpmwxdjrpqje.supabase.co';
+  const AUTH_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFuaXVlaG5jd3Btd3hkanJwcWplIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5NTM5NzgsImV4cCI6MjA5NTUyOTk3OH0.OdsG7yEOVYe1o76oGLIZLTL7vOT52CD8kjRWa6kD9rw';
+
+  // ── 集約対象のアプリ一覧（今後 trace-◯◯ を追加していく） ──
+  // supabase_url / supabase_anon_key が空のものはまだ接続情報未設定
+  const APPS = [
+    { id: 'trace-ive', name: 'Trace IVE', supabase_url: AUTH_URL, supabase_anon_key: AUTH_ANON_KEY },
+    // { id: 'trace-illit', name: 'Trace ILLIT', supabase_url: '', supabase_anon_key: '' },
+  ];
+
+  const client = supabase.createClient(AUTH_URL, AUTH_ANON_KEY);
+
+  function setStatus(msg, cls) {
+    const el = document.getElementById('login-status');
+    el.textContent = msg || '';
+    el.className = 'status' + (cls ? ' ' + cls : '');
+  }
+
+  async function loginWithX() {
+    setStatus('リダイレクト中...');
+    const { error } = await client.auth.signInWithOAuth({
+      provider: 'x',
+      options: { redirectTo: window.location.href.split('#')[0] }
+    });
+    if (error) setStatus('ログインに失敗しました: ' + error.message, 'err');
+  }
+
+  async function signOut() {
+    await client.auth.signOut();
+    location.reload();
+  }
+
+  function renderAppList() {
+    const list = document.getElementById('app-list');
+    list.innerHTML = APPS.map(function(app) {
+      const ready = !!app.supabase_url;
+      return '<div class="app-row" style="' + (ready ? '' : 'opacity:0.4;cursor:default;') + '" '
+        + (ready ? 'onclick="location.href=\'app.html?id=' + app.id + '\'"' : '')
+        + '><span class="app-name">' + app.name + '</span>'
+        + '<span class="app-arrow">' + (ready ? '›' : '準備中') + '</span></div>';
+    }).join('');
+  }
+
+  async function checkAdminAndShow(session) {
+    const { data, error } = await client
+      .from('admins')
+      .select('username, role')
+      .eq('user_id', session.user.id)
+      .maybeSingle();
+
+    if (error || !data) {
+      setStatus('このアカウントには管理者権限がありません', 'err');
+      await client.auth.signOut();
+      return;
+    }
+
+    document.getElementById('login-view').style.display = 'none';
+    document.getElementById('authed-view').style.display = 'block';
+    document.getElementById('me-username').textContent = data.username;
+    const roleEl = document.getElementById('me-role');
+    roleEl.textContent = data.role === 'super_admin' ? '👑 super_admin' : '🛡️ moderator';
+    roleEl.className = 'role-badge role-' + data.role;
+
+    renderAppList();
+    document.getElementById('app-picker').classList.add('show');
+  }
+
+  (async function init() {
+    const { data } = await client.auth.getSession();
+    if (data && data.session) {
+      await checkAdminAndShow(data.session);
+    }
+  })();
+
+  client.auth.onAuthStateChange(function(event, session) {
+    if (event === 'SIGNED_IN' && session) {
+      checkAdminAndShow(session);
+    }
+  });
+</script>
+
+</body>
+</html>
