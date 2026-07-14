@@ -146,6 +146,8 @@
   let APP_URL = '';
   let APP_KEY = '';
   let appClient = null;
+  let currentAdminUserId = null;
+  let currentAdminUsername = null;
 
   // onclick="..." 属性の中に安全に埋め込むためのJS文字列リテラル生成
   // （JSON.stringifyはダブルクォートを使うためonclick="..."属性が壊れる。シングルクォートで安全に埋め込む）
@@ -204,8 +206,26 @@
       location.href = 'index.html';
       return;
     }
+    currentAdminUserId = data.session.user.id;
+    currentAdminUsername = adminRow.username;
 
     loadPendingSubmissions();
+  }
+
+  // ── モデレーター操作ログ（誰が・いつ・どのアプリで・何をしたか） ──
+  // 認証用プロジェクト（AUTH_URL）側の admin_action_log テーブルに記録する。
+  // どのアプリのデータを操作した場合でも、ログ自体は常にここに集約する。
+  async function logAdminAction(action, targetId, targetLabel) {
+    try {
+      await authClient.from('admin_action_log').insert({
+        actor_user_id: currentAdminUserId,
+        actor_username: currentAdminUsername,
+        action: action,
+        target_id: targetId ? String(targetId) : null,
+        target_label: targetLabel || null,
+        app_id: appId,
+      });
+    } catch (e) { console.warn('logAdminAction error:', e); }
   }
 
   // ── 承認待ち（投稿） ──
@@ -325,6 +345,7 @@
       }
     }
     await loadPendingSubmissions();
+    logAdminAction('approve_new_spot', id, s.spot_name);
     showToast('✅ 承認しました');
   }
 
@@ -347,6 +368,7 @@
       await awardPointsViaFetch(s.submitter_id, 10);
     }
     await loadPendingSubmissions();
+    logAdminAction('approve_location_correction', id, s.target_spot_name || s.spot_name);
     showToast('✅ 位置を更新しました');
   }
 
@@ -363,12 +385,14 @@
     }
     await patchSubmission(id, { status: 'approved' });
     await loadPendingSubmissions();
+    logAdminAction('approve_wrong_report', id, s.spot_name);
     showToast('✅ 確定しました');
   }
 
   async function rejectSubmission(id) {
     await patchSubmission(id, { status: 'rejected' });
     await loadPendingSubmissions();
+    logAdminAction('reject_submission', id, null);
     showToast('❌ 却下しました');
   }
 
@@ -421,6 +445,7 @@
     });
     await awardPointsViaFetch(userId, amount);
     await loadPendingEvaluations();
+    logAdminAction('approve_eval', id, null);
     showToast('✅ 承認してポイントを付与しました');
   }
 
@@ -431,6 +456,7 @@
       body: JSON.stringify({ status: 'rejected' })
     });
     await loadPendingEvaluations();
+    logAdminAction('reject_eval', id, null);
     showToast('❌ 却下しました');
   }
 
@@ -485,6 +511,7 @@
     const { error } = await appClient.from('notices').insert({ title: title, body: body || null });
     if (error) { msg.textContent = 'エラー: ' + error.message; return; }
     await loadAdminNotices();
+    logAdminAction('post_notice', null, title);
     showToast('✅ 投稿しました');
   }
 
@@ -509,12 +536,14 @@
   async function toggleNoticeActive(id, current) {
     await appClient.from('notices').update({ is_active: !current }).eq('id', id);
     await loadAdminNotices();
+    logAdminAction(current ? 'unpublish_notice' : 'publish_notice', id, null);
   }
 
   async function deleteNotice(id) {
     if (!confirm('このお知らせを削除しますか？')) return;
     await appClient.from('notices').delete().eq('id', id);
     await loadAdminNotices();
+    logAdminAction('delete_notice', id, null);
     showToast('🗑️ 削除しました');
   }
 
@@ -550,6 +579,7 @@
       headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}` }
     });
     await loadAdminSpots();
+    logAdminAction('delete_spot', id, name);
     showToast('🗑️ 削除しました');
   }
 
@@ -588,6 +618,7 @@
     if (error) { alert('追加に失敗しました: ' + error.message); return; }
     document.getElementById('new-mod-username').value = '';
     await loadAdminList();
+    logAdminAction('add_moderator', null, username);
     showToast('🛡️ ' + username + ' をモデレーターに追加しました');
   }
 
