@@ -155,6 +155,21 @@
     return "'" + String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
   }
 
+  // spot-photos Storageの公開URLからファイル名を取り出して削除する
+  // （却下・削除で不要になった画像がStorageに残り続けるのを防ぐ）
+  async function deleteSpotPhotoByUrl(imageUrl) {
+    if (!imageUrl) return;
+    try {
+      const marker = '/spot-photos/';
+      const idx = imageUrl.indexOf(marker);
+      if (idx === -1) return;
+      const fileName = imageUrl.slice(idx + marker.length).split('?')[0];
+      if (!fileName) return;
+      const { error } = await appClient.storage.from('spot-photos').remove([fileName]);
+      if (error) console.warn('spot-photos削除失敗:', error);
+    } catch (e) { console.warn('deleteSpotPhotoByUrl error:', e); }
+  }
+
   function escHtml(str) {
     if (!str) return '';
     return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -390,6 +405,13 @@
   }
 
   async function rejectSubmission(id) {
+    try {
+      const res = await fetch(`${APP_URL}/rest/v1/submissions?id=eq.${id}&select=image_url`, {
+        headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}` }
+      });
+      const [s] = await res.json();
+      if (s && s.image_url) await deleteSpotPhotoByUrl(s.image_url);
+    } catch (e) { console.warn('rejectSubmission image lookup error:', e); }
     await patchSubmission(id, { status: 'rejected' });
     await loadPendingSubmissions();
     logAdminAction('reject_submission', id, null);
@@ -552,7 +574,7 @@
     const panel = document.getElementById('panel-spots');
     panel.innerHTML = '<div class="loading">読み込み中...</div>';
     try {
-      const res = await fetch(`${APP_URL}/rest/v1/spots?select=id,name,category,member,admin_level&order=created_at.desc&limit=50`, {
+      const res = await fetch(`${APP_URL}/rest/v1/spots?select=id,name,category,member,admin_level,image_url&order=created_at.desc&limit=50`, {
         headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}` }
       });
       const data = await res.json();
@@ -563,7 +585,7 @@
           + '<div class="item-meta" style="margin-bottom:0;">' + escHtml(s.category || '') + ' · ' + escHtml(s.member || '') + '</div></div>'
           + '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">'
           + '<span style="font-size:10px;padding:3px 8px;background:rgba(255,255,255,0.1);border-radius:20px;color:rgba(255,255,255,0.5);">' + escHtml(s.admin_level || '') + '</span>'
-          + '<button onclick="deleteSpot(' + jsq(s.id) + ',' + jsq(s.name) + ')" style="background:rgba(220,38,38,0.2);border:none;color:#fca5a5;padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer;">削除</button>'
+          + '<button onclick="deleteSpot(' + jsq(s.id) + ',' + jsq(s.name) + ',' + jsq(s.image_url || '') + ')" style="background:rgba(220,38,38,0.2);border:none;color:#fca5a5;padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer;">削除</button>'
           + '</div></div>';
       }).join('') || '<div class="empty">スポットがありません</div>';
     } catch (e) {
@@ -572,8 +594,9 @@
     }
   }
 
-  async function deleteSpot(id, name) {
+  async function deleteSpot(id, name, imageUrl) {
     if (!confirm('「' + name + '」を削除しますか？')) return;
+    if (imageUrl) await deleteSpotPhotoByUrl(imageUrl);
     await fetch(`${APP_URL}/rest/v1/spots?id=eq.${id}`, {
       method: 'DELETE',
       headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}` }
