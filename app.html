@@ -155,6 +155,30 @@
     return "'" + String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
   }
 
+  // ── 別プロジェクトのアプリ向け：Edge Function経由の書き込み ──
+  function isForeignApp() {
+    return APP_URL !== AUTH_URL;
+  }
+
+  async function callAdminWrite(action, payload) {
+    const { data: sessionData } = await authClient.auth.getSession();
+    const token = sessionData && sessionData.session ? sessionData.session.access_token : null;
+    if (!token) throw new Error('ログイン情報がありません');
+    const res = await fetch(APP_URL + '/functions/v1/admin-write', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token,
+        'apikey': APP_KEY,
+      },
+      body: JSON.stringify({ action: action, payload: payload }),
+    });
+    let out;
+    try { out = await res.json(); } catch (e) { out = {}; }
+    if (!res.ok || out.error) throw new Error(out.error || ('HTTP ' + res.status));
+    return out;
+  }
+
   // spot-photos Storageの公開URLからファイル名を取り出して削除する
   // （却下・削除で不要になった画像がStorageに残り続けるのを防ぐ）
   async function deleteSpotPhotoByUrl(imageUrl) {
@@ -530,8 +554,14 @@
     const body = (document.getElementById('notice-body-input').value || '').trim();
     const msg = document.getElementById('notice-post-msg');
     if (!title) { msg.textContent = 'タイトルを入力してください'; return; }
-    const { error } = await appClient.from('notices').insert({ title: title, body: body || null });
-    if (error) { msg.textContent = 'エラー: ' + error.message; return; }
+    try {
+      if (isForeignApp()) {
+        await callAdminWrite('notice_create', { title: title, body: body || null });
+      } else {
+        const { error } = await appClient.from('notices').insert({ title: title, body: body || null });
+        if (error) throw error;
+      }
+    } catch (e) { msg.textContent = 'エラー: ' + e.message; return; }
     await loadAdminNotices();
     logAdminAction('post_notice', null, title);
     showToast('✅ 投稿しました');
@@ -548,22 +578,42 @@
     const tmp = reordered[idx];
     reordered[idx] = reordered[swapIdx];
     reordered[swapIdx] = tmp;
-    for (let i = 0; i < reordered.length; i++) {
-      const r = await appClient.from('notices').update({ sort_order: i }).eq('id', reordered[i].id);
-      if (r.error) { alert('並び替えエラー: ' + r.error.message); return; }
-    }
+    try {
+      if (isForeignApp()) {
+        await callAdminWrite('notice_reorder', { orderedIds: reordered.map(function(r) { return r.id; }) });
+      } else {
+        for (let i = 0; i < reordered.length; i++) {
+          const r = await appClient.from('notices').update({ sort_order: i }).eq('id', reordered[i].id);
+          if (r.error) throw r.error;
+        }
+      }
+    } catch (e) { alert('並び替えエラー: ' + e.message); return; }
     await loadAdminNotices();
   }
 
   async function toggleNoticeActive(id, current) {
-    await appClient.from('notices').update({ is_active: !current }).eq('id', id);
+    try {
+      if (isForeignApp()) {
+        await callAdminWrite('notice_toggle', { id: id, is_active: !current });
+      } else {
+        const { error } = await appClient.from('notices').update({ is_active: !current }).eq('id', id);
+        if (error) throw error;
+      }
+    } catch (e) { alert('エラー: ' + e.message); return; }
     await loadAdminNotices();
     logAdminAction(current ? 'unpublish_notice' : 'publish_notice', id, null);
   }
 
   async function deleteNotice(id) {
     if (!confirm('このお知らせを削除しますか？')) return;
-    await appClient.from('notices').delete().eq('id', id);
+    try {
+      if (isForeignApp()) {
+        await callAdminWrite('notice_delete', { id: id });
+      } else {
+        const { error } = await appClient.from('notices').delete().eq('id', id);
+        if (error) throw error;
+      }
+    } catch (e) { alert('削除エラー: ' + e.message); return; }
     await loadAdminNotices();
     logAdminAction('delete_notice', id, null);
     showToast('🗑️ 削除しました');
@@ -637,8 +687,14 @@
   async function addModerator() {
     const username = document.getElementById('new-mod-username').value.trim();
     if (!username) { alert('ユーザー名を入力してください'); return; }
-    const { error } = await appClient.from('admins').insert({ username: username, role: 'moderator' });
-    if (error) { alert('追加に失敗しました: ' + error.message); return; }
+    try {
+      if (isForeignApp()) {
+        await callAdminWrite('admin_add', { username: username, role: 'moderator' });
+      } else {
+        const { error } = await appClient.from('admins').insert({ username: username, role: 'moderator' });
+        if (error) throw error;
+      }
+    } catch (e) { alert('追加に失敗しました: ' + e.message); return; }
     document.getElementById('new-mod-username').value = '';
     await loadAdminList();
     logAdminAction('add_moderator', null, username);
@@ -649,12 +705,22 @@
   async function loadDevSettingsPanel() {
     const panel = document.getElementById('panel-devmode');
     panel.innerHTML = '<div class="loading">読み込み中...</div>';
-    const { data: sessionData } = await appClient.auth.getSession();
-    const uid = sessionData && sessionData.session ? sessionData.session.user.id : null;
-    if (!uid) { panel.innerHTML = '<div class="err">ログイン情報を取得できませんでした</div>'; return; }
-    const { data } = await appClient.from('profiles').select('hide_from_ranking, dev_bypass_rank').eq('id', uid).maybeSingle();
-    const hideOn = !!(data && data.hide_from_ranking);
-    const bypassOn = !!(data && data.dev_bypass_rank);
+    let hideOn = false;
+    let bypassOn = false;
+    try {
+      if (isForeignApp()) {
+        const out = await callAdminWrite('dev_get', {});
+        hideOn = !!out.hide_from_ranking;
+        bypassOn = !!out.dev_bypass_rank;
+      } else {
+        const { data: sessionData } = await appClient.auth.getSession();
+        const uid = sessionData && sessionData.session ? sessionData.session.user.id : null;
+        if (!uid) { panel.innerHTML = '<div class="err">ログイン情報を取得できませんでした</div>'; return; }
+        const { data } = await appClient.from('profiles').select('hide_from_ranking, dev_bypass_rank').eq('id', uid).maybeSingle();
+        hideOn = !!(data && data.hide_from_ranking);
+        bypassOn = !!(data && data.dev_bypass_rank);
+      }
+    } catch (e) { panel.innerHTML = '<div class="err">読み込みエラー: ' + e.message + '</div>'; return; }
     panel.innerHTML = '<div class="item-card">'
       + '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.08);">'
       + '<div><div style="font-size:13px;font-weight:700;">ランキング非表示</div><div class="item-meta" style="margin-bottom:0;">達成率・推しファン・トップ貢献者バッジの集計から自分を除外</div></div>'
@@ -667,14 +733,24 @@
   }
 
   async function toggleDevSetting(field) {
-    const { data: sessionData } = await appClient.auth.getSession();
-    const uid = sessionData && sessionData.session ? sessionData.session.user.id : null;
-    if (!uid) return;
-    const { data } = await appClient.from('profiles').select(field).eq('id', uid).maybeSingle();
-    const next = !(data && data[field]);
-    const update = {};
-    update[field] = next;
-    await appClient.from('profiles').update(update).eq('id', uid);
+    try {
+      if (isForeignApp()) {
+        const out = await callAdminWrite('dev_get', {});
+        const current = field === 'hide_from_ranking' ? !!out.hide_from_ranking : !!out.dev_bypass_rank;
+        const nextHide = field === 'hide_from_ranking' ? !current : !!out.hide_from_ranking;
+        const nextBypass = field === 'dev_bypass_rank' ? !current : !!out.dev_bypass_rank;
+        await callAdminWrite('dev_toggle', { hide_from_ranking: nextHide, dev_bypass_rank: nextBypass });
+      } else {
+        const { data: sessionData } = await appClient.auth.getSession();
+        const uid = sessionData && sessionData.session ? sessionData.session.user.id : null;
+        if (!uid) return;
+        const { data } = await appClient.from('profiles').select(field).eq('id', uid).maybeSingle();
+        const next = !(data && data[field]);
+        const update = {};
+        update[field] = next;
+        await appClient.from('profiles').update(update).eq('id', uid);
+      }
+    } catch (e) { alert('更新エラー: ' + e.message); return; }
     await loadDevSettingsPanel();
     showToast('✅ 設定を更新しました');
   }
