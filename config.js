@@ -6,7 +6,7 @@ const AUTH_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFz
 // supabase_url / supabase_anon_key が空のものはまだ接続情報未設定
 const APPS = [
   { id: 'trace-ive', name: 'Trace IVE', supabase_url: AUTH_URL, supabase_anon_key: AUTH_ANON_KEY },
-  // { id: 'trace-illit', name: 'Trace ILLIT', supabase_url: '', supabase_anon_key: '' },
+   { id: 'trace-illit', name: 'Trace ILLIT', supabase_url: 'https://qmqcwopyvfqnbylxterr.supabase.co', supabase_anon_key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtcWN3b3B5dmZxbmJ5bHh0ZXJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1NjQ1OTQsImV4cCI6MjA5NjE0MDU5NH0.cjw1XNTBceYHb4KKTzHI4NWEGRuI09ykD4Fl6BStmxg' },
 ];
 
 function getAppConfig(id) {
