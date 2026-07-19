@@ -661,8 +661,15 @@
     const panel = document.getElementById('panel-admins');
     panel.innerHTML = '<div class="loading">読み込み中...</div>';
     try {
-      const { data, error } = await appClient.from('admins').select('*').order('created_at', { ascending: true });
-      if (error) throw error;
+      let data;
+      if (isForeignApp()) {
+        const out = await callAdminWrite('admin_list', {});
+        data = out.rows || [];
+      } else {
+        const { data: d, error } = await appClient.from('admins').select('*').order('created_at', { ascending: true });
+        if (error) throw error;
+        data = d;
+      }
       let html = '<div class="item-card">'
         + '<div style="font-size:13px;font-weight:700;margin-bottom:8px;">モデレーターを追加</div>'
         + '<input id="new-mod-username" placeholder="Xのユーザー名（例: @example）" style="width:100%;padding:10px;border-radius:8px;border:none;background:rgba(255,255,255,0.1);color:#fff;margin-bottom:8px;box-sizing:border-box;">'
