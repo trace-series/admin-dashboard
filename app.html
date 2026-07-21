@@ -364,15 +364,22 @@
     const [s] = await res.json();
     if (!s) return;
 
-    await fetch(`${APP_URL}/rest/v1/spots`, {
+    const spotRes = await fetch(`${APP_URL}/rest/v1/spots`, {
       method: 'POST',
-      headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}`, 'Content-Type': 'application/json' },
+      headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
       body: JSON.stringify({
         name: s.spot_name, lat: s.lat, lng: s.lng, sub: s.description, icon: '📍',
         category: s.category, address: '', member: s.member, image_url: s.image_url || null,
         discoverer: s.submitter, trust_score: 5, good_count: 0, bad_count: 0, admin_level: 'pending_review',
       })
     });
+    if (!spotRes.ok) {
+      const errBody = await spotRes.text();
+      console.error('spots insert failed:', spotRes.status, errBody);
+      alert('❌ spotsへの登録に失敗しました（承認は取り消されています）\nステータス: ' + spotRes.status + '\n' + errBody);
+      return; // 登録に失敗した場合は承認済みにせず、ポイントも付与しない
+    }
+
     await patchSubmission(id, { status: 'approved' });
 
     if (s.submitter_id) {
