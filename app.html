@@ -358,6 +358,19 @@
   }
 
   async function approveNewSpot(id) {
+    if (isForeignApp()) {
+      try {
+        await callAdminWrite('approve_new_spot', { id: id });
+      } catch (e) {
+        alert('❌ 承認に失敗しました: ' + e.message);
+        return;
+      }
+      await loadPendingSubmissions();
+      logAdminAction('approve_new_spot', id, null);
+      showToast('✅ 承認しました');
+      return;
+    }
+
     const res = await fetch(`${APP_URL}/rest/v1/submissions?id=eq.${id}`, {
       headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}` }
     });
