@@ -358,53 +358,14 @@
   }
 
   async function approveNewSpot(id) {
-    if (isForeignApp()) {
-      try {
-        await callAdminWrite('approve_new_spot', { id: id });
-      } catch (e) {
-        alert('❌ 承認に失敗しました: ' + e.message);
-        return;
-      }
-      await loadPendingSubmissions();
-      logAdminAction('approve_new_spot', id, null);
-      showToast('✅ 承認しました');
+    try {
+      await callAdminWrite('approve_new_spot', { id: id });
+    } catch (e) {
+      alert('❌ 承認に失敗しました: ' + e.message);
       return;
     }
-
-    const res = await fetch(`${APP_URL}/rest/v1/submissions?id=eq.${id}`, {
-      headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}` }
-    });
-    const [s] = await res.json();
-    if (!s) return;
-
-    const spotRes = await fetch(`${APP_URL}/rest/v1/spots`, {
-      method: 'POST',
-      headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
-      body: JSON.stringify({
-        name: s.spot_name, lat: s.lat, lng: s.lng, sub: s.description, icon: '📍',
-        category: s.category, address: '', member: s.member, image_url: s.image_url || null,
-        discoverer: s.submitter, trust_score: 5, good_count: 0, bad_count: 0, admin_level: 'pending_review',
-      })
-    });
-    if (!spotRes.ok) {
-      const errBody = await spotRes.text();
-      console.error('spots insert failed:', spotRes.status, errBody);
-      alert('❌ spotsへの登録に失敗しました（承認は取り消されています）\nステータス: ' + spotRes.status + '\n' + errBody);
-      return; // 登録に失敗した場合は承認済みにせず、ポイントも付与しない
-    }
-
-    await patchSubmission(id, { status: 'approved' });
-
-    if (s.submitter_id) {
-      await insertPointLog({ user_id: s.submitter_id, category: '早期発見', amount: 50, spot_name: s.spot_name, status: 'confirmed' });
-      await awardPointsViaFetch(s.submitter_id, 50);
-      if (s.image_url) {
-        await insertPointLog({ user_id: s.submitter_id, category: '元ネタ写真提供', amount: 30, spot_name: s.spot_name, status: 'confirmed' });
-        await awardPointsViaFetch(s.submitter_id, 30);
-      }
-    }
     await loadPendingSubmissions();
-    logAdminAction('approve_new_spot', id, s.spot_name);
+    logAdminAction('approve_new_spot', id, null);
     showToast('✅ 承認しました');
   }
 
