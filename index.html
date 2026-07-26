@@ -111,6 +111,7 @@
   }
   .app-row:active { background: rgba(255,255,255,0.1); }
   .app-name { font-size: 14px; font-weight: 700; }
+  .app-meta { font-size: 11px; color: rgba(255,255,255,0.4); margin-top: 2px; }
   .app-arrow { color: rgba(255,255,255,0.3); font-size: 16px; }
 
   .signout {
@@ -175,15 +176,47 @@
     location.reload();
   }
 
+  // 各アプリのSupabaseプロジェクトからprofilesの件数だけを取得する
+  // （Prefer: count=exact + HEAD相当のrangeでbody無し取得、軽量な件数のみのリクエスト）
+  async function fetchUserCount(app) {
+    try {
+      const res = await fetch(app.supabase_url + '/rest/v1/profiles?select=id', {
+        headers: {
+          'apikey': app.supabase_anon_key,
+          'Authorization': 'Bearer ' + app.supabase_anon_key,
+          'Prefer': 'count=exact',
+          'Range': '0-0',
+        }
+      });
+      const range = res.headers.get('content-range'); // 例: "0-0/123"
+      if (range) return parseInt(range.split('/')[1], 10);
+      return null;
+    } catch (e) {
+      console.warn('user count取得失敗:', app.id, e);
+      return null;
+    }
+  }
+
   function renderAppList() {
     const list = document.getElementById('app-list');
     list.innerHTML = APPS.map(function(app) {
       const ready = !!app.supabase_url;
-      return '<div class="app-row" style="' + (ready ? '' : 'opacity:0.4;cursor:default;') + '" '
+      return '<div class="app-row" id="app-row-' + app.id + '" style="' + (ready ? '' : 'opacity:0.4;cursor:default;') + '" '
         + (ready ? 'onclick="location.href=\'app.html?id=' + app.id + '\'"' : '')
-        + '><span class="app-name">' + app.name + '</span>'
+        + '><div><span class="app-name">' + app.name + '</span>'
+        + '<div class="app-meta" id="app-usercount-' + app.id + '">' + (ready ? '登録人数を読み込み中...' : '') + '</div></div>'
         + '<span class="app-arrow">' + (ready ? '›' : '準備中') + '</span></div>';
     }).join('');
+
+    // 登録人数は非同期で後から埋める（一覧の表示自体はブロックしない）
+    APPS.forEach(function(app) {
+      if (!app.supabase_url) return;
+      fetchUserCount(app).then(function(count) {
+        const el = document.getElementById('app-usercount-' + app.id);
+        if (!el) return;
+        el.textContent = (count === null) ? '登録人数：取得失敗' : ('登録人数：' + count + '人');
+      });
+    });
   }
 
   async function checkAdminAndShow(session) {
