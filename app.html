@@ -179,6 +179,18 @@
     return out;
   }
 
+  // 書き込みは admin-write（管理者確認つき）経由で行う。
+  // そのアプリのadmin-writeがまだ古い版（不明なaction）の場合だけ、従来の直接書き込みで代用する
+  async function adminWriteOr(action, payload, fallback) {
+    try {
+      return await callAdminWrite(action, payload);
+    } catch (e) {
+      if (/不明なaction/.test(e.message || '') && fallback) return await fallback();
+      alert('❌ 保存に失敗しました（' + action + '）: ' + e.message);
+      throw e;
+    }
+  }
+
   // spot-photos Storageの公開URLからファイル名を取り出して削除する
   // （却下・削除で不要になった画像がStorageに残り続けるのを防ぐ）
   async function deleteSpotPhotoByUrl(imageUrl) {
@@ -189,8 +201,10 @@
       if (idx === -1) return;
       const fileName = imageUrl.slice(idx + marker.length).split('?')[0];
       if (!fileName) return;
-      const { error } = await appClient.storage.from('spot-photos').remove([fileName]);
-      if (error) console.warn('spot-photos削除失敗:', error);
+      await adminWriteOr('photo_remove', { path: fileName }, async function() {
+        const { error } = await appClient.storage.from('spot-photos').remove([fileName]);
+        if (error) console.warn('spot-photos削除失敗:', error);
+      });
     } catch (e) { console.warn('deleteSpotPhotoByUrl error:', e); }
   }
 
@@ -328,32 +342,38 @@
   async function awardPointsViaFetch(userId, amount) {
     if (!userId || !amount) return;
     try {
-      const res = await fetch(`${APP_URL}/rest/v1/profiles?id=eq.${userId}&select=points`, {
-        headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}` }
-      });
-      const rows = await res.json();
-      const current = (rows && rows[0] && rows[0].points) || 0;
-      await fetch(`${APP_URL}/rest/v1/profiles?id=eq.${userId}`, {
-        method: 'PATCH',
-        headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ points: current + amount })
+      await adminWriteOr('add_points', { user_id: userId, amount: amount }, async function() {
+        const res = await fetch(`${APP_URL}/rest/v1/profiles?id=eq.${userId}&select=points`, {
+          headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}` }
+        });
+        const rows = await res.json();
+        const current = (rows && rows[0] && rows[0].points) || 0;
+        await fetch(`${APP_URL}/rest/v1/profiles?id=eq.${userId}`, {
+          method: 'PATCH',
+          headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ points: current + amount })
+        });
       });
     } catch (e) { console.warn('awardPointsViaFetch error:', e); }
   }
 
   async function patchSubmission(id, body) {
-    await fetch(`${APP_URL}/rest/v1/submissions?id=eq.${id}`, {
-      method: 'PATCH',
-      headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+    await adminWriteOr('submission_set_status', { id: id, status: body.status }, async function() {
+      await fetch(`${APP_URL}/rest/v1/submissions?id=eq.${id}`, {
+        method: 'PATCH',
+        headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
     });
   }
 
   async function insertPointLog(body) {
-    await fetch(`${APP_URL}/rest/v1/point_log`, {
-      method: 'POST',
-      headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
-      body: JSON.stringify(Object.assign({ created_at: new Date().toISOString() }, body))
+    await adminWriteOr('point_log_insert', body, async function() {
+      await fetch(`${APP_URL}/rest/v1/point_log`, {
+        method: 'POST',
+        headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+        body: JSON.stringify(Object.assign({ created_at: new Date().toISOString() }, body))
+      });
     });
   }
 
@@ -376,10 +396,12 @@
     const [s] = await res.json();
     if (!s) return;
 
-    await fetch(`${APP_URL}/rest/v1/spots?name=eq.${encodeURIComponent(s.target_spot_name)}`, {
-      method: 'PATCH',
-      headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lat: s.lat, lng: s.lng })
+    await adminWriteOr('spot_set_location', { name: s.target_spot_name, lat: s.lat, lng: s.lng }, async function() {
+      await fetch(`${APP_URL}/rest/v1/spots?name=eq.${encodeURIComponent(s.target_spot_name)}`, {
+        method: 'PATCH',
+        headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lat: s.lat, lng: s.lng })
+      });
     });
     await patchSubmission(id, { status: 'approved' });
 
@@ -465,10 +487,12 @@
   }
 
   async function approveEvalPoint(id, userId, amount) {
-    await fetch(`${APP_URL}/rest/v1/point_log?id=eq.${id}`, {
-      method: 'PATCH',
-      headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'confirmed' })
+    await adminWriteOr('point_log_set_status', { id: id, status: 'confirmed' }, async function() {
+      await fetch(`${APP_URL}/rest/v1/point_log?id=eq.${id}`, {
+        method: 'PATCH',
+        headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'confirmed' })
+      });
     });
     await awardPointsViaFetch(userId, amount);
     await loadPendingEvaluations();
@@ -477,10 +501,12 @@
   }
 
   async function rejectEvalPoint(id) {
-    await fetch(`${APP_URL}/rest/v1/point_log?id=eq.${id}`, {
-      method: 'PATCH',
-      headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'rejected' })
+    await adminWriteOr('point_log_set_status', { id: id, status: 'rejected' }, async function() {
+      await fetch(`${APP_URL}/rest/v1/point_log?id=eq.${id}`, {
+        method: 'PATCH',
+        headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'rejected' })
+      });
     });
     await loadPendingEvaluations();
     logAdminAction('reject_eval', id, null);
@@ -628,9 +654,11 @@
   async function deleteSpot(id, name, imageUrl) {
     if (!confirm('「' + name + '」を削除しますか？')) return;
     if (imageUrl) await deleteSpotPhotoByUrl(imageUrl);
-    await fetch(`${APP_URL}/rest/v1/spots?id=eq.${id}`, {
-      method: 'DELETE',
-      headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}` }
+    await adminWriteOr('spot_delete', { id: id }, async function() {
+      await fetch(`${APP_URL}/rest/v1/spots?id=eq.${id}`, {
+        method: 'DELETE',
+        headers: { 'apikey': APP_KEY, 'Authorization': `Bearer ${APP_KEY}` }
+      });
     });
     await loadAdminSpots();
     logAdminAction('delete_spot', id, name);
